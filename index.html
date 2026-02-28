@@ -1,0 +1,1530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agile Capability Assessment</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/htm@3.1.1/dist/htm.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    .fade-in { animation: fadeIn 0.2s ease-in; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+    .bar-fill { transition: width 0.4s ease; }
+    .score-btn { transition: all 0.15s ease; }
+    .score-btn:hover { transform: scale(1.05); }
+    .radar-label { font-size: 11px; fill: #374151; }
+    @media print { .no-print { display: none !important; } }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <div id="root"></div>
+  <script>
+    var html = htm.bind(React.createElement);
+    var useState = React.useState;
+    var useReducer = React.useReducer;
+    var useEffect = React.useEffect;
+    var useMemo = React.useMemo;
+    var useCallback = React.useCallback;
+    var createContext = React.createContext;
+    var useContext = React.useContext;
+    var useRef = React.useRef;
+
+    // ─── Utils ───────────────────────────────────────────────────────────
+    function genId() { return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2,11); }
+
+    var GRADE_THRESHOLDS = [
+      { min: 0.9, grade: 'A', label: 'Excellent' },
+      { min: 0.8, grade: 'B', label: 'Good' },
+      { min: 0.7, grade: 'C', label: 'Average' },
+      { min: 0.5, grade: 'D', label: 'Below Average' },
+      { min: 0, grade: 'F', label: 'Needs Improvement' }
+    ];
+
+    function letterGrade(pct) {
+      for (var i = 0; i < GRADE_THRESHOLDS.length; i++) {
+        if (pct >= GRADE_THRESHOLDS[i].min) return GRADE_THRESHOLDS[i].grade;
+      }
+      return 'F';
+    }
+
+    function gradeLabel(pct) {
+      for (var i = 0; i < GRADE_THRESHOLDS.length; i++) {
+        if (pct >= GRADE_THRESHOLDS[i].min) return GRADE_THRESHOLDS[i].label;
+      }
+      return 'Needs Improvement';
+    }
+
+    var GRADE_COLORS = {
+      A: { text: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200', hex: '#059669', fill: '#d1fae5' },
+      B: { text: 'text-blue-700', bg: 'bg-blue-50', border: 'border-blue-200', hex: '#2563eb', fill: '#dbeafe' },
+      C: { text: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-200', hex: '#d97706', fill: '#fef3c7' },
+      D: { text: 'text-orange-700', bg: 'bg-orange-50', border: 'border-orange-200', hex: '#ea580c', fill: '#fed7aa' },
+      F: { text: 'text-red-700', bg: 'bg-red-50', border: 'border-red-200', hex: '#dc2626', fill: '#fee2e2' },
+    };
+
+    function pctColor(pct) {
+      if (pct >= 0.9) return GRADE_COLORS['A'];
+      if (pct >= 0.8) return GRADE_COLORS['B'];
+      if (pct >= 0.7) return GRADE_COLORS['C'];
+      if (pct >= 0.5) return GRADE_COLORS['D'];
+      return GRADE_COLORS['F'];
+    }
+
+    var CHART_COLORS = ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#84cc16','#f43f5e','#14b8a6','#a855f7','#eab308','#0ea5e9'];
+
+    var SCORE_LABELS = { 1: 'Strongly Disagree', 2: 'Disagree', 3: 'Neutral', 4: 'Agree', 5: 'Strongly Agree' };
+
+    // Scale conversion from the spreadsheet: maps (rating, type) -> weighted score
+    var SCALE_CONVERSION = {
+      'Must Have':  { 1: -4, 2: -3, 3: -2, 4: -1, 5: 0 },
+      'Standard':   { 1: -4, 2: -2, 3: 0,  4: 2,  5: 4 },
+      'Up-Side':    { 1: 0,  2: 1,  3: 2,  4: 3,  5: 4 }
+    };
+
+    function weightedScore(rating, type) {
+      if (!rating || !SCALE_CONVERSION[type]) return 0;
+      return SCALE_CONVERSION[type][rating] || 0;
+    }
+
+    // ─── Default Template (from spreadsheet) ──────────────────────────
+    var defaultTemplate = {
+      orgCategories: [
+        { id: 'org_leadership', name: 'Agile Leadership and Governance', categoryWeight: 4, questions: [
+          { id: 'ol1', text: 'Any deviations from core Scrum are done for a documented reason that makes sense', type: 'Must Have', weight: 5, label: 'Adherence to core Scrum' },
+          { id: 'ol2', text: 'Management does not require waterfall timing or reporting', type: 'Must Have', weight: 5, label: 'Agile reporting and tracking' },
+          { id: 'ol3', text: 'Management does not interfere with the team during a sprint, nor allows others to interfere', type: 'Must Have', weight: 5, label: 'Non-interference' },
+          { id: 'ol4', text: 'Executive Leadership understands and can articulate Scrum', type: 'Standard', weight: 4, label: 'Leadership Agile knowledge' },
+          { id: 'ol5', text: 'Company Agile goals and success measures are clearly articulated and known by all', type: 'Standard', weight: 4, label: 'Clear Agile goals' },
+          { id: 'ol6', text: 'Managers facilitate team process rather than directing the team', type: 'Standard', weight: 5, label: 'Servant leadership' },
+          { id: 'ol7', text: 'Management receives and understands regular Scrum reporting and key metrics', type: 'Standard', weight: 5, label: 'Agile metrics' },
+          { id: 'ol8', text: 'Management has a "problem solving" rather than "blame assigning" focus', type: 'Standard', weight: 5, label: 'Problem-solving focus' },
+          { id: 'ol9', text: 'Incentives are based on team performance rather than individual', type: 'Standard', weight: 3, label: 'Agile-aligned incentives' },
+          { id: 'ol10', text: 'Scrum Executive Sponsor and Transition Team in place to remove identified impediments quickly', type: 'Standard', weight: 3, label: 'Sponsor and Transition team' },
+          { id: 'ol11', text: 'Management knows what the top impediments are and has a prioritized list and action plan to address them', type: 'Standard', weight: 5, label: 'Plan to remove top impediments' },
+          { id: 'ol12', text: 'Management recognizes that 80% of value comes from 20% of features, prioritizes features and releases product appropriately', type: 'Standard', weight: 3, label: '80/20 product prioritization' },
+          { id: 'ol13', text: 'Management makes business priorities and values clear and transparent, equips POs with the info they need to judge business value', type: 'Standard', weight: 4, label: 'Clear business priorities' },
+          { id: 'ol14', text: 'If there is more than one Product Owner, there is a designated Chief Product Owner', type: 'Standard', weight: 4, label: 'Chief Product Owner' },
+          { id: 'ol15', text: 'Interdependent teams conduct a daily Scrum of Scrums', type: 'Standard', weight: 5, label: 'Scrum of Scrums' },
+          { id: 'ol16', text: 'All inter-dependent teams use a common product backlog', type: 'Standard', weight: 3, label: 'Shared product backlog' },
+          { id: 'ol17', text: 'Continuous improvement across all Scrum Teams and Product Owner Teams is tracked and visible to all', type: 'Standard', weight: 5, label: 'Continuous improvement tracked' },
+          { id: 'ol18', text: 'Scrum Teams and non-Scrum teams coordinate effectively to not slow down Scrum teams', type: 'Standard', weight: 3, label: 'Scrum/non-Scrum coordination' },
+          { id: 'ol19', text: 'Management team holds a regular meeting to align stakeholders and plan ahead on key issues ("Meta Scrum")', type: 'Up-Side', weight: 3, label: 'Meta Scrum' },
+          { id: 'ol20', text: 'Management removes impediments of any size within 5 business days, and this is documented and tracked', type: 'Up-Side', weight: 3, label: 'Impediment removal' },
+          { id: 'ol21', text: 'Executive Team manages itself using Scrum', type: 'Up-Side', weight: 2, label: 'Scrum management team' },
+          { id: 'ol22', text: 'Management has expanded Scrum to other non-product development areas of the company (e.g. sales, marketing, support etc)', type: 'Up-Side', weight: 2, label: 'Enterprise Scrum' },
+          { id: 'ol23', text: 'Organization has a formal portfolio management process for selecting and governing initiatives based on strategic alignment', type: 'Standard', weight: 4, label: 'Portfolio governance' },
+          { id: 'ol24', text: 'Value streams are mapped end-to-end from concept through customer delivery, with clear ownership at each stage', type: 'Standard', weight: 3, label: 'Value stream mapping' },
+          { id: 'ol25', text: 'Leadership uses flow metrics (cycle time, WIP, deployment frequency) to guide improvement and funding decisions', type: 'Standard', weight: 4, label: 'Flow-based leadership' },
+          { id: 'ol26', text: 'New initiatives are funded with dedicated capacity rather than by reallocating existing team members mid-project', type: 'Standard', weight: 4, label: 'Capacity-based funding' },
+          { id: 'ol27', text: 'Executive and manager performance goals are tied to customer outcomes and delivery performance', type: 'Standard', weight: 3, label: 'Outcome-aligned leadership incentives' },
+          { id: 'ol28', text: 'Organization has shifted from project-based funding to persistent product teams with long-term ownership', type: 'Up-Side', weight: 3, label: 'Product over project funding' },
+          { id: 'ol29', text: 'There is a formal intake process and all work enters through it, including executive requests', type: 'Must Have', weight: 4, label: 'Formal intake process' },
+          { id: 'ol30', text: 'Organization invests in dedicated agile coaching and training rather than relying on ad hoc or grassroots learning', type: 'Standard', weight: 3, label: 'Agile training investment' },
+        ]},
+      ],
+      teamCategories: [
+        { id: 'team', name: 'I. The Team', categoryWeight: 3, questions: [
+          { id: 't1', text: 'Teams are stable and do not change (1 = members changed every 2-3 sprints)', type: 'Must Have', weight: 5, label: 'Stable teams' },
+          { id: 't2', text: 'Team Size is 3-9', type: 'Must Have', weight: 5, label: 'Team size' },
+          { id: 't3', text: 'All team members are 100% dedicated to one team', type: 'Standard', weight: 3, label: 'Dedicated team' },
+          { id: 't4', text: 'Team is cross-functional and has all capabilities needed to produce the end product', type: 'Standard', weight: 3, label: 'Cross-functional teams' },
+          { id: 't5', text: 'Each job function can be performed by at least 2 team members', type: 'Standard', weight: 4, label: 'Flexible team roles' },
+          { id: 't6', text: 'Team understands and can articulate core Scrum principles and processes', type: 'Standard', weight: 5, label: 'Team Scrum knowledge' },
+          { id: 't7', text: 'Team members work on one story at a time, all the way to DONE. No Multitasking.', type: 'Standard', weight: 3, label: 'Multitasking' },
+          { id: 't8', text: 'Team has the freedom to do what is needed to advance the product free from excessive bureaucracy', type: 'Standard', weight: 5, label: 'Team empowerment' },
+          { id: 't9', text: 'Team knows current and historic team velocity', type: 'Standard', weight: 4, label: 'Velocity awareness' },
+          { id: 't10', text: 'Team can explain business value of all stories', type: 'Standard', weight: 2, label: 'Business value awareness' },
+          { id: 't11', text: 'Team self-manages, and individual members volunteer rather than are assigned tasks', type: 'Standard', weight: 4, label: 'Self-organization' },
+          { id: 't12', text: 'Team members know/understand current Kaizen, and can say what they are doing to address it', type: 'Standard', weight: 4, label: 'Kaizen awareness' },
+          { id: 't13', text: 'Team is co-located in space wherever practical', type: 'Standard', weight: 2, label: 'Co-located teams' },
+          { id: 't14', text: 'Team knows top 3-4 impediments', type: 'Up-Side', weight: 1, label: 'Impediment awareness' },
+          { id: 't15', text: 'The team is clearly having fun, joking', type: 'Up-Side', weight: 3, label: 'Having fun' },
+          { id: 't16', text: 'Team uses paired programming techniques to foster learning and development', type: 'Up-Side', weight: 2, label: 'Paired programming' },
+          { id: 't17', text: 'Team has achieved "hyper-productivity" at some point (4x their original velocity)', type: 'Up-Side', weight: 5, label: 'Hyper-productivity' },
+        ]},
+        { id: 'sm', name: 'II. ScrumMaster', categoryWeight: 3, questions: [
+          { id: 'sm1', text: 'ScrumMaster understands and can articulate all Scrum Principles and Constructs', type: 'Must Have', weight: 5, label: 'SM Scrum knowledge' },
+          { id: 'sm2', text: 'ScrumMaster is NOT the former Project Manager', type: 'Must Have', weight: 2, label: 'Hierarchy' },
+          { id: 'sm3', text: 'ScrumMaster DOES NOT write performance reviews for their team', type: 'Must Have', weight: 5, label: 'Review alignment' },
+          { id: 'sm4', text: 'ScrumMaster facilitates all team meetings and enforces Scrum rules', type: 'Standard', weight: 5, label: 'Active facilitation' },
+          { id: 'sm5', text: 'ScrumMaster does not assign work to the team or tell them how to do it', type: 'Standard', weight: 5, label: 'Team empowerment' },
+          { id: 'sm6', text: 'ScrumMaster consistently probes to identify impediments', type: 'Standard', weight: 4, label: 'Probe on impediments' },
+          { id: 'sm7', text: 'ScrumMaster has prioritized list of impediments and works effectively and quickly to remove them', type: 'Standard', weight: 5, label: 'Track impediments' },
+          { id: 'sm8', text: 'ScrumMaster runs the Interrupt Pattern to minimize team disruption', type: 'Standard', weight: 4, label: 'Interrupt' },
+          { id: 'sm9', text: 'ScrumMaster protects team from interference', type: 'Standard', weight: 4, label: 'Non-interference' },
+          { id: 'sm10', text: 'ScrumMaster is an advocate for the team and interacts comfortably with them', type: 'Standard', weight: 3, label: 'Team advocate' },
+          { id: 'sm11', text: 'ScrumMaster ensures the teams progress is transparent within the team and to outsiders', type: 'Standard', weight: 3, label: 'Drives transparency' },
+          { id: 'sm12', text: 'ScrumMaster can communicate well with all stakeholders and "has a seat at the table"', type: 'Standard', weight: 4, label: 'Seat at table' },
+          { id: 'sm13', text: 'ScrumMaster sits with the team', type: 'Standard', weight: 2, label: 'Co-located' },
+        ]},
+        { id: 'po', name: 'III. Product Owner', categoryWeight: 5, questions: [
+          { id: 'po1', text: 'Product Owner clearly understands and can articulate the structure and principles of Scrum', type: 'Must Have', weight: 5, label: 'PO Scrum knowledge' },
+          { id: 'po2', text: 'Product Owner has deep and clear understanding of customers needs', type: 'Must Have', weight: 5, label: 'Customer understanding' },
+          { id: 'po3', text: 'Product Owner is available to the team and has direct contact with them', type: 'Must Have', weight: 4, label: 'Available to team' },
+          { id: 'po4', text: 'Product Owner has the power to make actionable decisions', type: 'Must Have', weight: 5, label: 'Decisive' },
+          { id: 'po5', text: 'Product Owner spends 50% of the time interacting with clients', type: 'Standard', weight: 3, label: 'External-facing' },
+          { id: 'po6', text: 'Product Owner maintains up to date release plan based on current team velocity', type: 'Standard', weight: 3, label: 'Release plans' },
+          { id: 'po7', text: 'Product Owner does not interrupt or interfere with the team during the Sprint', type: 'Standard', weight: 5, label: 'Non-interrupt' },
+          { id: 'po8', text: 'Product Owner interacts with the team effectively at Review, Retrospective, and Planning meetings', type: 'Standard', weight: 3, label: 'Comfortable with team' },
+          { id: 'po9', text: 'Product Owner knows the team\'s current and historical velocity', type: 'Standard', weight: 5, label: 'Velocity awareness' },
+          { id: 'po10', text: 'Product Owner prioritizes stories that "reduce risk;" prototypes, experiments, etc.', type: 'Standard', weight: 3, label: 'Risk reduction' },
+          { id: 'po11', text: 'Product Owner includes reduction of technical debt as a priority', type: 'Standard', weight: 3, label: 'Technical debt' },
+          { id: 'po12', text: 'Product Owner enforces strict definition of done when accepting stories as done', type: 'Standard', weight: 4, label: 'Done means DONE' },
+          { id: 'po13', text: 'Product Owner has a clear definition of ready, and does not let incomplete stories into the sprint', type: 'Standard', weight: 4, label: 'Ready means READY' },
+          { id: 'po14', text: 'Product Owner understands and prioritizes backlog by business value, including knowing the cost of delays', type: 'Standard', weight: 5, label: 'Business value focus' },
+          { id: 'po15', text: 'Product Owner\'s vision for product is closely aligned with company leadership', type: 'Standard', weight: 2, label: 'Aligned with leadership' },
+          { id: 'po16', text: 'Product Owner has a product vision and can translate that into a product backlog', type: 'Standard', weight: 5, label: 'Vision captured in backlog' },
+          { id: 'po17', text: 'If there are many Product Owners there is a Chief Product Owner and the PO team speaks with one voice', type: 'Standard', weight: 3, label: 'Chief product owner' },
+          { id: 'po18', text: 'Product Owner estimates release dates as a range rather than a single value', type: 'Up-Side', weight: 1, label: 'Ranged release dates' },
+        ]},
+        { id: 'backlog', name: 'IV. Backlog', categoryWeight: 3, questions: [
+          { id: 'bl1', text: 'The Product Owner owns the backlog, controls what enters it, and the order of stories', type: 'Must Have', weight: 5, label: 'PO controls backlog' },
+          { id: 'bl2', text: 'There are at least two sprints of groomed, prioritized and "ready" stories waiting for the team', type: 'Must Have', weight: 3, label: 'Clear path ahead' },
+          { id: 'bl3', text: 'Product Backlog is highly visible to the team and stakeholders', type: 'Must Have', weight: 5, label: 'Highly visible' },
+          { id: 'bl4', text: 'User Stories are defined clearly, actionably and from the end customers perspective', type: 'Must Have', weight: 4, label: 'Actionable user stories' },
+          { id: 'bl5', text: 'Stories describe concrete product increments that increase value for stakeholders', type: 'Must Have', weight: 5, label: 'Stories are true increments' },
+          { id: 'bl6', text: 'There is one product backlog for related product elements, even across many teams', type: 'Standard', weight: 3, label: 'Shared backlog' },
+          { id: 'bl7', text: 'Regular backlog grooming process exists involving ~10% of team and Product Owner\'s time', type: 'Standard', weight: 4, label: 'Grooming process' },
+          { id: 'bl8', text: 'Stories are less granularly defined as they move farther away from the present', type: 'Standard', weight: 2, label: 'Increasing granularity' },
+          { id: 'bl9', text: 'There is a strong and enforced definition of Ready', type: 'Standard', weight: 4, label: 'Ready is READY' },
+          { id: 'bl10', text: 'There is a strong and enforced definition of Done', type: 'Standard', weight: 4, label: 'Done is DONE' },
+          { id: 'bl11', text: 'User Stories are measured in points not hours', type: 'Standard', weight: 3, label: 'Points not hours' },
+          { id: 'bl12', text: 'User Stories are estimated by the team members who will actually be doing the work', type: 'Standard', weight: 4, label: 'Team estimates work' },
+          { id: 'bl13', text: 'Team uses reference stories to maintain consistent points estimate', type: 'Standard', weight: 2, label: 'Reference stories' },
+          { id: 'bl14', text: 'Only stories that meet the definition of "Done" are included in velocity', type: 'Standard', weight: 3, label: 'Velocity only includes Done' },
+          { id: 'bl15', text: 'Top stories are small enough to fit in a sprint', type: 'Standard', weight: 4, label: 'Story size appropriate' },
+          { id: 'bl16', text: 'Points estimates remain consistent over time', type: 'Standard', weight: 2, label: 'Constant estimates' },
+          { id: 'bl17', text: 'Teams sharing a common backlog use consistent reference stories for estimation', type: 'Standard', weight: 2, label: 'Consistent estimates across teams' },
+          { id: 'bl18', text: 'Stories are based on clear "enabling specifications" rich enough to clarify intent', type: 'Up-Side', weight: 3, label: 'Enabling specifications' },
+        ]},
+        { id: 'sprint', name: 'V. Sprint', categoryWeight: 3, questions: [
+          { id: 'sp1', text: 'Sprint duration has been constant for at least 3 sprints', type: 'Must Have', weight: 3, label: 'Stable duration' },
+          { id: 'sp2', text: 'Length of Sprint is less than 30 days', type: 'Must Have', weight: 4, label: 'Sprint length' },
+          { id: 'sp3', text: 'There is a clear, visible, constantly updated Sprint backlog', type: 'Must Have', weight: 4, label: 'Visible backlog' },
+          { id: 'sp4', text: 'Each Sprint delivers potentially shippable increment', type: 'Standard', weight: 5, label: 'Shippable increment' },
+          { id: 'sp5', text: 'All testing is completed within the sprint', type: 'Standard', weight: 3, label: 'Integrated testing' },
+          { id: 'sp6', text: 'Team is not disrupted during the Sprint', type: 'Standard', weight: 4, label: 'Non-interruption' },
+          { id: 'sp7', text: 'Dependent teams integrate within each Sprint', type: 'Standard', weight: 4, label: 'Aligned across teams' },
+        ]},
+        { id: 'planning', name: 'VI. Sprint Planning Meeting', categoryWeight: 4, questions: [
+          { id: 'pl1', text: 'Team only pulls in the same or fewer points into the sprint as its current velocity', type: 'Standard', weight: 3, label: "Yesterday's weather" },
+          { id: 'pl2', text: 'Actual velocity is close to estimated Velocity', type: 'Standard', weight: 4, label: 'Estimated = actual' },
+          { id: 'pl3', text: 'Team utilizes its Definition of Ready when deciding whether to pull stories into the sprint', type: 'Standard', weight: 4, label: 'Pull only when READY' },
+          { id: 'pl4', text: 'If not already done, Team estimates the work to complete all stories pulled into the sprint', type: 'Standard', weight: 5, label: 'All stories estimated' },
+          { id: 'pl5', text: 'Team breaks down each story into smaller tasks, if needed', type: 'Standard', weight: 3, label: 'Task breakdown' },
+          { id: 'pl6', text: 'Team discusses planned approach to complete each story', type: 'Standard', weight: 2, label: 'Discuss approach' },
+          { id: 'pl7', text: 'Product Owner participates in Sprint planning, but only to outline goals and answer questions', type: 'Standard', weight: 5, label: 'PO participation' },
+          { id: 'pl8', text: 'Sprint planning results in an actionable Sprint Plan', type: 'Standard', weight: 3, label: 'Actionable Sprint plan' },
+          { id: 'pl9', text: 'Whole team believes plan is achievable in the Sprint and commits to completing it', type: 'Standard', weight: 3, label: 'Team commitment' },
+          { id: 'pl10', text: 'Product Owner articulates priorities and goals for sprint', type: 'Standard', weight: 4, label: 'Clear Sprint goals' },
+        ]},
+        { id: 'standup', name: 'VII. Daily Standup Meeting', categoryWeight: 3, questions: [
+          { id: 'ds1', text: 'Each team member answers the 3 questions (tasks since last meeting, tasks until next meeting, key impediments)', type: 'Standard', weight: 3, label: 'Three questions' },
+          { id: 'ds2', text: 'Impediments are surfaced and solved immediately if small or plan developed for larger impediments', type: 'Standard', weight: 5, label: 'Impediments addressed' },
+          { id: 'ds3', text: 'Standup is conducted standing in front of the backlog and/or dashboard', type: 'Standard', weight: 4, label: 'Standing at board' },
+          { id: 'ds4', text: 'Daily standup is limited to less than 15 minutes', type: 'Standard', weight: 3, label: 'Fifteen minutes or less' },
+          { id: 'ds5', text: 'All team members attend on time, or a team members reports for any planned absent members', type: 'Standard', weight: 4, label: 'On-time' },
+          { id: 'ds6', text: 'A Scrum of Scrums is conducted by the ScrumMasters across multiple teams using the same backlog', type: 'Standard', weight: 3, label: 'Scrum of Scrums' },
+        ]},
+        { id: 'review', name: 'VIII. Sprint Review and Retrospective', categoryWeight: 4, questions: [
+          { id: 'rv1', text: 'Team Members conduct a regular Sprint Review at the end of each Sprint', type: 'Must Have', weight: 4, label: 'Review held consistently' },
+          { id: 'rv2', text: 'Team Members conduct Retrospective at the end of each Sprint', type: 'Must Have', weight: 4, label: 'Retro held consistently' },
+          { id: 'rv3', text: 'Whole team participates in both meetings, including SM and PO', type: 'Standard', weight: 4, label: 'Whole team participates' },
+          { id: 'rv4', text: 'Retrospective is rigorous, thoughtful and exposes needed process improvements', type: 'Standard', weight: 5, label: 'Rigorous retrospective' },
+          { id: 'rv5', text: 'One priority Kaizen is identified at the end of each retrospective', type: 'Standard', weight: 5, label: 'Kaizen identified' },
+          { id: 'rv6', text: 'Kaizen is added to the backlog for the next sprint with explicit acceptance tests', type: 'Standard', weight: 4, label: 'Kaizen added to backlog' },
+          { id: 'rv7', text: 'Retrospective is cause-seeking, not blame-seeking', type: 'Standard', weight: 4, label: 'Solution-oriented' },
+          { id: 'rv8', text: 'Customers are invited directly to Sprint Review meetings', type: 'Up-Side', weight: 3, label: 'Customer participation' },
+        ]},
+        { id: 'tools', name: 'IX. Agile Tools', categoryWeight: 2, questions: [
+          { id: 'at1', text: 'Product and Sprint backlogs updated in real-time or near real-time', type: 'Must Have', weight: 4, label: 'Real-time backlog update' },
+          { id: 'at2', text: 'Burndown chart that the team reviews and adjusts at least daily', type: 'Must Have', weight: 5, label: 'Daily burndown update' },
+          { id: 'at3', text: 'Team tracks impediments in a visible way', type: 'Standard', weight: 4, label: 'Impediments tracked' },
+          { id: 'at4', text: 'Distributed teams have sufficient tooling to maintain clear visibility of sprint/product backlogs and velocity', type: 'Standard', weight: 5, label: 'Distributed tools' },
+          { id: 'at5', text: 'Distributed teams use high bandwidth communication (video conferencing, etc.)', type: 'Standard', weight: 4, label: 'High-bandwidth communication' },
+          { id: 'at6', text: 'Team produces a regular dashboard of key performance metrics', type: 'Up-Side', weight: 2, label: 'Scrum dashboard' },
+        ]},
+        { id: 'workspace', name: 'X. Agile Workspace', categoryWeight: 1, questions: [
+          { id: 'ws1', text: 'Workspace set up in a "Scrum Village" layout with central common area, open work spaces, and private areas', type: 'Standard', weight: 2, label: 'Scrum village layout' },
+          { id: 'ws2', text: 'Product Backlog, Sprint Backlog and Burndown Chart are displayed in a common area or easily accessible to all team members', type: 'Standard', weight: 5, label: 'Visible tracking tools' },
+          { id: 'ws3', text: 'Team is co-located wherever practicable, ideally in one common workspace', type: 'Standard', weight: 3, label: 'Co-location' },
+          { id: 'ws4', text: 'Physical evidence in workspace is consistent with leadership and team statements about goals and priorities', type: 'Standard', weight: 4, label: 'Walk the walk' },
+          { id: 'ws5', text: 'Team has personalized their workspace to reflect team style and personality and fun', type: 'Up-Side', weight: 2, label: 'Personalization' },
+        ]},
+        { id: 'engineering', name: 'XI. Engineering Practices', categoryWeight: 3, questions: [
+          { id: 'ep1', text: 'Each version of the code is stored centrally with a new version number and capturing the person who made any edits', type: 'Must Have', weight: 4, label: 'Version control' },
+          { id: 'ep2', text: 'Team has a shared approach and norms for writing code to allow members to collaborate effectively', type: 'Must Have', weight: 3, label: 'Coding Standards' },
+          { id: 'ep3', text: 'If pair programming is not used, at least there is a formal paired review of all code', type: 'Must Have', weight: 3, label: 'Code Review' },
+          { id: 'ep4', text: 'CI server in place, and code is continuously compiled incorporating acceptance testing in integration', type: 'Must Have', weight: 5, label: 'Continuous Integration' },
+          { id: 'ep5', text: 'All stories are written with pre-defined acceptance tests', type: 'Standard', weight: 3, label: 'Test Driven Development' },
+          { id: 'ep6', text: 'Code released to clients is virtually bug-free, and any identified bugs are corrected within 24-hours', type: 'Standard', weight: 5, label: 'Bug free code' },
+          { id: 'ep7', text: 'Refactoring is done regularly to ensure that the code is as consolidated and elegant as it can be', type: 'Standard', weight: 3, label: 'Refactoring' },
+          { id: 'ep8', text: 'Software development environment is always ready to release the next update and can go live at any time', type: 'Up-Side', weight: 3, label: 'Push button go live' },
+        ]},
+        { id: 'testing', name: 'XII. Testing Practices', categoryWeight: 4, questions: [
+          { id: 'tp1', text: 'All testing is completed within the sprint, and any defects identified are also corrected within the sprint', type: 'Must Have', weight: 5, label: 'Testing within sprint' },
+          { id: 'tp2', text: 'Test cases are maintained using the same discipline as for the development process', type: 'Must Have', weight: 3, label: 'Test case maintenance' },
+          { id: 'tp3', text: 'All unit, acceptance, and regression testing is 100% automated during the build', type: 'Standard', weight: 4, label: 'Automated testing' },
+          { id: 'tp4', text: 'The team uses the complete Test Driven Development loop: define tests in advance, incorporate feature, refactoring', type: 'Standard', weight: 3, label: 'Unit testing' },
+          { id: 'tp5', text: 'At each build, code is tested against a pre-defined benchmark to ensure new features have not broken past functionality', type: 'Standard', weight: 4, label: 'Regression testing' },
+          { id: 'tp6', text: 'Acceptance tests are defined beforehand, readable, PO aware of pass/fail', type: 'Standard', weight: 4, label: 'Acceptance testing' },
+          { id: 'tp7', text: 'All product is explicitly tested for reliability, security, stability, etc.', type: 'Standard', weight: 3, label: 'Performance Optimization' },
+          { id: 'tp8', text: 'Each new build is systematically pressure tested from the customer\'s perspective', type: 'Up-Side', weight: 2, label: 'Exploratory testing' },
+        ]},
+        { id: 'values', name: 'XIII. Agile Values & Principles', categoryWeight: 4, questions: [
+          { id: 'av1', text: 'Team prioritizes individuals and interactions over processes and tools when making decisions', type: 'Standard', weight: 4, label: 'Individuals over processes' },
+          { id: 'av2', text: 'Team focuses on delivering working software as the primary measure of progress rather than documentation or status reports', type: 'Must Have', weight: 5, label: 'Working software over documentation' },
+          { id: 'av3', text: 'Team actively collaborates with customers and stakeholders rather than relying solely on contractual requirements', type: 'Standard', weight: 4, label: 'Customer collaboration' },
+          { id: 'av4', text: 'Team welcomes and responds to changing requirements, even late in development', type: 'Standard', weight: 4, label: 'Responding to change' },
+          { id: 'av5', text: 'Team delivers working software frequently, in weeks rather than months', type: 'Must Have', weight: 5, label: 'Frequent delivery' },
+          { id: 'av6', text: 'Business people and developers work together daily throughout the project', type: 'Standard', weight: 3, label: 'Daily business-dev cooperation' },
+          { id: 'av7', text: 'Projects are built around motivated individuals who are given the environment, support, and trust they need', type: 'Standard', weight: 4, label: 'Motivated and trusted teams' },
+          { id: 'av8', text: 'The team maintains a sustainable pace of development indefinitely without burnout', type: 'Standard', weight: 3, label: 'Sustainable pace' },
+          { id: 'av9', text: 'The team continuously pays attention to technical excellence and good design', type: 'Standard', weight: 4, label: 'Technical excellence' },
+          { id: 'av10', text: 'The team actively practices simplicity - maximizing the amount of work not done', type: 'Up-Side', weight: 3, label: 'Simplicity' },
+          { id: 'av11', text: 'The best architectures, requirements, and designs emerge from self-organizing teams rather than being dictated', type: 'Standard', weight: 4, label: 'Self-organizing design' },
+          { id: 'av12', text: 'At regular intervals, the team reflects on how to become more effective and adjusts accordingly', type: 'Must Have', weight: 5, label: 'Regular reflection and adaptation' },
+          { id: 'av13', text: 'The team satisfies the customer through early and continuous delivery of valuable software', type: 'Standard', weight: 4, label: 'Early and continuous delivery' },
+          { id: 'av14', text: 'Face-to-face conversation is used as the primary form of communication within the team', type: 'Standard', weight: 3, label: 'Face-to-face communication' },
+        ]},
+        { id: 'flow', name: 'XIV. Flow & Delivery Metrics', categoryWeight: 4, questions: [
+          { id: 'fl1', text: 'Team tracks and uses flow metrics (cycle time, lead time, throughput) to guide improvements', type: 'Must Have', weight: 5, label: 'Flow metrics tracked' },
+          { id: 'fl2', text: 'Team enforces Work-In-Progress (WIP) limits and team members focus on one item at a time', type: 'Must Have', weight: 5, label: 'WIP limits enforced' },
+          { id: 'fl3', text: 'Deployment frequency allows for rapid feedback from customers (days/weeks, not months)', type: 'Standard', weight: 4, label: 'Deployment frequency' },
+          { id: 'fl4', text: 'Mean time to recover from failures is measured and continuously improved', type: 'Standard', weight: 3, label: 'Mean time to recovery' },
+          { id: 'fl5', text: 'Stories are sliced into vertical increments small enough to complete in 1-2 days', type: 'Standard', weight: 4, label: 'Small story slicing' },
+          { id: 'fl6', text: 'The time from code complete to customer feedback is less than one month', type: 'Standard', weight: 4, label: 'Feedback cycle time' },
+          { id: 'fl7', text: 'Team has clear visibility into the full pipeline from development through deployment to customer', type: 'Standard', weight: 3, label: 'Pipeline visibility' },
+          { id: 'fl8', text: 'Cross-team dependencies are identified early and managed proactively, not discovered mid-sprint', type: 'Standard', weight: 4, label: 'Proactive dependency management' },
+          { id: 'fl9', text: 'The team can deploy changes independently without waiting for other teams to bundle releases', type: 'Up-Side', weight: 3, label: 'Independent deployability' },
+          { id: 'fl10', text: 'Business value and customer outcomes are measured, not just features delivered or tasks completed', type: 'Standard', weight: 5, label: 'Outcome over output metrics' },
+        ]},
+        { id: 'valuestream', name: 'XV. Value Stream & Portfolio', categoryWeight: 3, questions: [
+          { id: 'vs1', text: 'There is a clear, transparent process for prioritizing new initiatives based on strategic alignment and business value', type: 'Must Have', weight: 5, label: 'Transparent prioritization' },
+          { id: 'vs2', text: 'The organization has mapped its value streams from concept to customer delivery', type: 'Standard', weight: 3, label: 'Value stream mapping' },
+          { id: 'vs3', text: 'Portfolio-level WIP limits prevent teams from being overloaded with competing priorities', type: 'Standard', weight: 4, label: 'Portfolio WIP limits' },
+          { id: 'vs4', text: 'New strategic initiatives are funded with dedicated resources rather than by reallocating existing team members', type: 'Standard', weight: 4, label: 'Resource abundance mindset' },
+          { id: 'vs5', text: 'Leadership does not bypass the intake process to insert urgent work mid-sprint', type: 'Must Have', weight: 5, label: 'Intake process integrity' },
+          { id: 'vs6', text: 'Teams are organized around products and value streams rather than projects or functional silos', type: 'Standard', weight: 4, label: 'Product over project teams' },
+          { id: 'vs7', text: 'There is a single product owner or chief product owner with clear authority over the product vision and backlog', type: 'Standard', weight: 3, label: 'Unified product ownership' },
+          { id: 'vs8', text: 'Strategic priorities and rationale are shared openly with all teams, enabling alignment without top-down directives', type: 'Standard', weight: 4, label: 'Strategic transparency' },
+          { id: 'vs9', text: 'Quarterly or regular portfolio reviews assess initiative progress against business outcomes, not just milestones', type: 'Up-Side', weight: 3, label: 'Outcome-based portfolio reviews' },
+        ]},
+        { id: 'culture', name: 'XVI. Organizational Culture & Learning', categoryWeight: 3, questions: [
+          { id: 'cu1', text: 'Team members feel psychologically safe to raise problems, admit mistakes, and challenge ideas without fear of punishment', type: 'Must Have', weight: 5, label: 'Psychological safety' },
+          { id: 'cu2', text: 'There is a formal investment in agile training and role-specific coaching (not just ad hoc or grassroots)', type: 'Must Have', weight: 4, label: 'Formal agile training' },
+          { id: 'cu3', text: 'Retrospective action items have clear owners, due dates, and are tracked to completion', type: 'Standard', weight: 5, label: 'Retro accountability' },
+          { id: 'cu4', text: 'Retrospectives use root-cause analysis techniques rather than focusing on surface-level symptoms', type: 'Standard', weight: 4, label: 'Root-cause retrospectives' },
+          { id: 'cu5', text: 'Communities of practice exist for key roles (Scrum Masters, Product Owners, engineers) to share knowledge', type: 'Standard', weight: 3, label: 'Communities of practice' },
+          { id: 'cu6', text: 'Managers and leaders model empowering behaviors: removing barriers, supporting autonomy, not directing daily work', type: 'Standard', weight: 4, label: 'Empowering leadership' },
+          { id: 'cu7', text: 'Individual and team incentives are aligned with customer outcomes and delivery performance, not just feature output', type: 'Standard', weight: 4, label: 'Outcome-aligned incentives' },
+          { id: 'cu8', text: 'Knowledge sharing is deliberate and structured, not dependent on key individuals (no hero culture)', type: 'Standard', weight: 3, label: 'Structured knowledge sharing' },
+          { id: 'cu9', text: 'Teams collaborate through swarming and mobbing techniques rather than working in isolation on individual tasks', type: 'Up-Side', weight: 3, label: 'Collaborative work patterns' },
+          { id: 'cu10', text: 'The organization treats failures as learning opportunities and conducts blameless post-mortems', type: 'Standard', weight: 4, label: 'Blameless learning culture' },
+          { id: 'cu11', text: 'Communication flows peer-to-peer within teams rather than through managers or authority figures', type: 'Standard', weight: 3, label: 'Peer-to-peer communication' },
+          { id: 'cu12', text: 'Meeting culture is effective: meetings have clear purposes, time-boxes are respected, and outcomes are actionable', type: 'Standard', weight: 3, label: 'Effective meeting culture' },
+        ]},
+        { id: 'ai', name: 'XVII. AI & Innovation Readiness', categoryWeight: 2, questions: [
+          { id: 'ai1', text: 'The organization has established governance policies for AI development and deployment (bias, privacy, compliance)', type: 'Standard', weight: 4, label: 'AI governance' },
+          { id: 'ai2', text: 'AI adoption is driven by clear use cases and customer value rather than executive mandates or competitive pressure', type: 'Standard', weight: 3, label: 'Value-driven AI adoption' },
+          { id: 'ai3', text: 'Teams have access to and are trained on AI productivity tools (code assistants, testing tools, etc.)', type: 'Standard', weight: 3, label: 'AI tool enablement' },
+          { id: 'ai4', text: 'There is a clear strategic vision for how AI and emerging technologies fit into the product roadmap', type: 'Standard', weight: 3, label: 'AI strategic vision' },
+          { id: 'ai5', text: 'Data standards and quality practices support AI/ML model development and training', type: 'Up-Side', weight: 2, label: 'Data readiness for AI' },
+          { id: 'ai6', text: 'The organization fosters a culture of experimentation with clear guidelines for innovation time and risk tolerance', type: 'Up-Side', weight: 3, label: 'Innovation culture' },
+        ]},
+      ],
+      scaleConversion: {
+        'Must Have':  { 1: -4, 2: -3, 3: -2, 4: -1, 5: 0 },
+        'Standard':   { 1: -4, 2: -2, 3: 0,  4: 2,  5: 4 },
+        'Up-Side':    { 1: 0,  2: 1,  3: 2,  4: 3,  5: 4 }
+      },
+
+    };
+
+    // ─── Score Calculation Engine ────────────────────────────────────────
+    function calcCategoryScore(questions, ratings, scaleConv) {
+      var totalWeightedScore = 0;
+      var totalMaxScore = 0;
+      var answered = 0;
+      questions.forEach(function(q) {
+        var r = ratings[q.id];
+        if (r && r > 0) {
+          answered++;
+          var conv = scaleConv[q.type] || scaleConv['Standard'];
+          var ws = conv[r] || 0;
+          var maxWs = conv[5] || 4;
+          var minWs = conv[1] || -4;
+          totalWeightedScore += ws * q.weight;
+          totalMaxScore += maxWs * q.weight;
+        }
+      });
+      if (totalMaxScore === 0) return { score: 0, pct: 0, answered: answered, total: questions.length };
+      // Normalize: shift so min=0
+      var totalMinScore = 0;
+      questions.forEach(function(q) {
+        var r = ratings[q.id];
+        if (r && r > 0) {
+          var conv = scaleConv[q.type] || scaleConv['Standard'];
+          var minWs = conv[1] || -4;
+          totalMinScore += minWs * q.weight;
+        }
+      });
+      var range = totalMaxScore - totalMinScore;
+      var normalized = range > 0 ? (totalWeightedScore - totalMinScore) / range : 0;
+      return { score: totalWeightedScore, pct: normalized, answered: answered, total: questions.length };
+    }
+
+    function calcOverallScore(categories, ratings, scaleConv) {
+      var totalWeightedPct = 0;
+      var totalWeight = 0;
+      var catResults = [];
+      categories.forEach(function(cat) {
+        var result = calcCategoryScore(cat.questions, ratings, scaleConv);
+        catResults.push(Object.assign({ categoryId: cat.id, categoryName: cat.name, categoryWeight: cat.categoryWeight }, result));
+        if (result.answered > 0) {
+          totalWeightedPct += result.pct * cat.categoryWeight;
+          totalWeight += cat.categoryWeight;
+        }
+      });
+      var overallPct = totalWeight > 0 ? totalWeightedPct / totalWeight : 0;
+      return { overallPct: overallPct, grade: letterGrade(overallPct), categoryResults: catResults };
+    }
+
+    // ─── State Management ──────────────────────────────────────────────
+    var STORAGE_KEY = 'agile-assessment-state';
+
+    function createDefaultTeam(id, name) {
+      return { id: id || genId(), name: name || 'Team 1', productArea: '', division: '', ratings: {}, comments: {}, createdAt: new Date().toISOString() };
+    }
+
+    function createDefaultOrg() {
+      return { ratings: {}, comments: {} };
+    }
+
+    function loadState() {
+      try {
+        var raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          var p = JSON.parse(raw);
+          if (p && p.template && p.teams) return p;
+        }
+      } catch(e) {}
+      return {
+        template: defaultTemplate,
+        companyName: '',
+        teams: [createDefaultTeam(null, 'Team 1')],
+        orgAssessment: createDefaultOrg(),
+        activeTeamId: null,
+        activeView: 'assess'
+      };
+    }
+
+    function saveState(state) {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch(e) {}
+    }
+
+    function reducer(state, action) {
+      var p = action.payload;
+      switch (action.type) {
+        case 'SET_COMPANY_NAME':
+          return Object.assign({}, state, { companyName: p });
+        case 'ADD_TEAM': {
+          var t = createDefaultTeam(null, p.name || ('Team ' + (state.teams.length + 1)));
+          if (p.productArea) t.productArea = p.productArea;
+          if (p.division) t.division = p.division;
+          return Object.assign({}, state, { teams: state.teams.concat([t]), activeTeamId: t.id });
+        }
+        case 'UPDATE_TEAM':
+          return Object.assign({}, state, { teams: state.teams.map(function(t) { return t.id === p.id ? Object.assign({}, t, p) : t; }) });
+        case 'DELETE_TEAM': {
+          var filtered = state.teams.filter(function(t) { return t.id !== p.id; });
+          var aid = state.activeTeamId === p.id ? (filtered.length > 0 ? filtered[0].id : null) : state.activeTeamId;
+          return Object.assign({}, state, { teams: filtered, activeTeamId: aid });
+        }
+        case 'SET_TEAM_RATING': {
+          return Object.assign({}, state, {
+            teams: state.teams.map(function(t) {
+              if (t.id !== p.teamId) return t;
+              var r = Object.assign({}, t.ratings);
+              r[p.questionId] = p.rating;
+              return Object.assign({}, t, { ratings: r });
+            })
+          });
+        }
+        case 'SET_TEAM_COMMENT': {
+          return Object.assign({}, state, {
+            teams: state.teams.map(function(t) {
+              if (t.id !== p.teamId) return t;
+              var c = Object.assign({}, t.comments);
+              c[p.questionId] = p.comment;
+              return Object.assign({}, t, { comments: c });
+            })
+          });
+        }
+        case 'SET_ORG_RATING': {
+          var or2 = Object.assign({}, state.orgAssessment.ratings);
+          or2[p.questionId] = p.rating;
+          return Object.assign({}, state, { orgAssessment: Object.assign({}, state.orgAssessment, { ratings: or2 }) });
+        }
+        case 'SET_ORG_COMMENT': {
+          var oc = Object.assign({}, state.orgAssessment.comments);
+          oc[p.questionId] = p.comment;
+          return Object.assign({}, state, { orgAssessment: Object.assign({}, state.orgAssessment, { comments: oc }) });
+        }
+        case 'SET_ACTIVE_TEAM':
+          return Object.assign({}, state, { activeTeamId: p });
+        case 'SET_VIEW':
+          return Object.assign({}, state, { activeView: p });
+        case 'UPDATE_TEMPLATE':
+          return Object.assign({}, state, { template: p });
+        case 'IMPORT_STATE':
+          return p;
+        case 'RESET_STATE':
+          return { template: defaultTemplate, companyName: '', teams: [createDefaultTeam(null, 'Team 1')], orgAssessment: createDefaultOrg(), activeTeamId: null, activeView: 'assess' };
+        default: return state;
+      }
+    }
+
+    var AppCtx = createContext(null);
+    function useApp() { return useContext(AppCtx); }
+
+    // ─── Shared Components ──────────────────────────────────────────────
+    function PctBadge(props) {
+      var pct = props.pct || 0;
+      var c = pctColor(pct);
+      var sz = props.size === 'lg' ? 'text-2xl px-4 py-1.5' : props.size === 'sm' ? 'text-xs px-2 py-0.5' : 'text-sm px-3 py-1';
+      return html`<span className=${'font-bold rounded-lg border ' + c.text + ' ' + c.bg + ' ' + c.border + ' ' + sz}>${Math.round(pct * 100)}%</span>`;
+    }
+
+    function ProgressBar(props) {
+      var val = Math.min(100, Math.max(0, props.value || 0));
+      var color = props.color || 'bg-blue-500';
+      return html`<div className=${'w-full bg-gray-200 rounded-full ' + (props.height || 'h-2') + ' ' + (props.className || '')}>
+        <div className=${'rounded-full bar-fill ' + (props.height || 'h-2') + ' ' + color} style=${{ width: val + '%' }} />
+      </div>`;
+    }
+
+    function Icon(props) {
+      return html`<svg className=${props.className || 'w-4 h-4'} fill=${props.fill || 'none'} viewBox="0 0 24 24" stroke=${props.stroke || 'currentColor'}>
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth=${props.sw || 2} d=${props.d} />
+      </svg>`;
+    }
+
+    function ConfirmDialog(props) {
+      if (!props.open) return null;
+      return html`<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick=${props.onCancel}>
+        <div className="bg-white rounded-xl shadow-xl p-6 max-w-sm mx-4 fade-in" onClick=${function(e) { e.stopPropagation(); }}>
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">${props.title}</h3>
+          <p className="text-gray-600 mb-6">${props.message}</p>
+          <div className="flex justify-end gap-3">
+            <button onClick=${props.onCancel} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+            <button onClick=${props.onConfirm} className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600">Confirm</button>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    // ─── Radar Chart (SVG) ──────────────────────────────────────────────
+    function RadarChart(props) {
+      var data = props.data || [];
+      var size = props.size || 300;
+      var cx = size / 2, cy = size / 2;
+      var radius = size * 0.35;
+      var n = data.length;
+      if (n < 3) return null;
+
+      function polarToCart(angle, r) {
+        var a = angle - Math.PI / 2;
+        return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
+      }
+
+      var gridLines = [0.2, 0.4, 0.6, 0.8, 1.0];
+      var gridPaths = gridLines.map(function(level) {
+        var points = [];
+        for (var i = 0; i < n; i++) {
+          var angle = (2 * Math.PI * i) / n;
+          var pt = polarToCart(angle, radius * level);
+          points.push(pt.x + ',' + pt.y);
+        }
+        return points.join(' ');
+      });
+
+      var dataPoints = data.map(function(d, i) {
+        var angle = (2 * Math.PI * i) / n;
+        return polarToCart(angle, radius * Math.max(0, Math.min(1, d.value)));
+      });
+      var dataPath = dataPoints.map(function(p) { return p.x + ',' + p.y; }).join(' ');
+
+      var labelPoints = data.map(function(d, i) {
+        var angle = (2 * Math.PI * i) / n;
+        return polarToCart(angle, radius + 28);
+      });
+
+      // Multiple data series support
+      var series = props.series || [{ data: data, color: '#3b82f6', fillColor: 'rgba(59,130,246,0.15)' }];
+
+      return html`<svg width=${size} height=${size} viewBox=${'0 0 ' + size + ' ' + size} className=${props.className || ''}>
+        ${gridPaths.map(function(pts, idx) {
+          return html`<polygon key=${idx} points=${pts} fill="none" stroke="#e5e7eb" strokeWidth="1" />`;
+        })}
+        ${data.map(function(d, i) {
+          var angle = (2 * Math.PI * i) / n;
+          var ep = polarToCart(angle, radius);
+          return html`<line key=${'ax'+i} x1=${cx} y1=${cy} x2=${ep.x} y2=${ep.y} stroke="#e5e7eb" strokeWidth="1" />`;
+        })}
+        ${series.map(function(s, si) {
+          var sPoints = (s.data || data).map(function(d, i) {
+            var angle = (2 * Math.PI * i) / n;
+            return polarToCart(angle, radius * Math.max(0, Math.min(1, d.value)));
+          });
+          var sPath = sPoints.map(function(p) { return p.x + ',' + p.y; }).join(' ');
+          return html`<g key=${'s'+si}>
+            <polygon points=${sPath} fill=${s.fillColor || 'rgba(59,130,246,0.15)'} stroke=${s.color || '#3b82f6'} strokeWidth="2" />
+            ${sPoints.map(function(p, pi) {
+              return html`<circle key=${pi} cx=${p.x} cy=${p.y} r="3" fill=${s.color || '#3b82f6'} />`;
+            })}
+          </g>`;
+        })}
+        ${labelPoints.map(function(p, i) {
+          var anchor = p.x < cx - 10 ? 'end' : p.x > cx + 10 ? 'start' : 'middle';
+          return html`<text key=${'l'+i} x=${p.x} y=${p.y} textAnchor=${anchor} className="radar-label" dominantBaseline="middle">${data[i].label.length > 18 ? data[i].label.slice(0,16) + '...' : data[i].label}</text>`;
+        })}
+        ${gridLines.map(function(level, idx) {
+          var lp = polarToCart(0, radius * level);
+          return html`<text key=${'gl'+idx} x=${lp.x + 4} y=${lp.y - 2} fill="#9ca3af" fontSize="9">${Math.round(level * 100)}%</text>`;
+        })}
+      </svg>`;
+    }
+
+    // ─── Horizontal Bar Chart ───────────────────────────────────────────
+    function HBarChart(props) {
+      var data = props.data || [];
+      var barH = 28;
+      var gap = 6;
+      var labelW = props.labelWidth || 180;
+      var chartW = props.width || 500;
+      var totalH = data.length * (barH + gap) + 10;
+      var barAreaW = chartW - labelW - 60;
+
+      return html`<svg width=${chartW} height=${totalH} viewBox=${'0 0 ' + chartW + ' ' + totalH} className=${props.className || ''}>
+        ${data.map(function(d, i) {
+          var y = i * (barH + gap) + 5;
+          var w = Math.max(0, Math.min(1, d.value)) * barAreaW;
+          var color = pctColor(d.value).hex;
+          return html`<g key=${i}>
+            <text x=${labelW - 8} y=${y + barH/2 + 1} textAnchor="end" fontSize="12" fill="#374151" dominantBaseline="middle">${d.label.length > 25 ? d.label.slice(0,23) + '...' : d.label}</text>
+            <rect x=${labelW} y=${y + 2} width=${barAreaW} height=${barH - 4} rx="4" fill="#f3f4f6" />
+            <rect x=${labelW} y=${y + 2} width=${w} height=${barH - 4} rx="4" fill=${color} opacity="0.8">
+              <animate attributeName="width" from="0" to=${w} dur="0.5s" fill="freeze" />
+            </rect>
+            <text x=${labelW + barAreaW + 6} y=${y + barH/2 + 1} fontSize="11" fill="#6b7280" dominantBaseline="middle">${Math.round(d.value * 100)}%</text>
+          </g>`;
+        })}
+      </svg>`;
+    }
+
+    // ─── Score Rating Buttons ───────────────────────────────────────────
+    function RatingButtons(props) {
+      var current = props.value || 0;
+      return html`<div className="flex gap-1">
+        ${[1,2,3,4,5].map(function(v) {
+          var active = current === v;
+          var colors = v <= 2 ? (active ? 'bg-red-500 text-white border-red-500' : 'border-gray-300 text-gray-500 hover:border-red-300 hover:bg-red-50')
+            : v === 3 ? (active ? 'bg-amber-500 text-white border-amber-500' : 'border-gray-300 text-gray-500 hover:border-amber-300 hover:bg-amber-50')
+            : (active ? 'bg-emerald-500 text-white border-emerald-500' : 'border-gray-300 text-gray-500 hover:border-emerald-300 hover:bg-emerald-50');
+          return html`<button key=${v} onClick=${function() { props.onChange(active ? 0 : v); }}
+            className=${'score-btn w-9 h-9 rounded-lg border-2 font-semibold text-sm ' + colors}
+            title=${SCORE_LABELS[v]}>${v}</button>`;
+        })}
+      </div>`;
+    }
+
+    // ─── Assessment Form (for one category) ─────────────────────────────
+    function CategoryAssessment(props) {
+      var cat = props.category;
+      var ratings = props.ratings;
+      var comments = props.comments;
+      var onRate = props.onRate;
+      var onComment = props.onComment;
+      var scaleConv = props.scaleConversion;
+      var result = calcCategoryScore(cat.questions, ratings, scaleConv);
+      var expanded = props.expanded;
+
+      return html`<div className="bg-white rounded-xl shadow-sm border border-gray-200 mb-4 overflow-hidden">
+        <button onClick=${props.onToggle} className="w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
+          <div className="flex items-center gap-3">
+            <span className="text-lg font-semibold text-gray-800">${cat.name}</span>
+            <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">Weight: ${cat.categoryWeight}</span>
+            <span className="text-xs text-gray-400">${result.answered}/${result.total} answered</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <${ProgressBar} value=${result.pct * 100} className="w-24" color=${'bg-[' + pctColor(result.pct).hex + ']'} />
+            <span className="text-sm font-medium text-gray-600 w-12 text-right">${Math.round(result.pct * 100)}%</span>
+            <${PctBadge} pct=${result.pct} size="sm" />
+            <${Icon} className=${'w-5 h-5 text-gray-400 transition-transform ' + (expanded ? 'rotate-180' : '')} d="M19 9l-7 7-7-7" />
+          </div>
+        </button>
+        ${expanded && html`<div className="px-5 pb-4 fade-in">
+          <div className="border-t pt-4">
+            <table className="w-full">
+              <thead>
+                <tr className="text-xs text-gray-500 uppercase">
+                  <th className="text-left pb-2 w-8">#</th>
+                  <th className="text-left pb-2">Criteria</th>
+                  <th className="text-left pb-2 w-20">Type</th>
+                  <th className="text-left pb-2 w-16">Weight</th>
+                  <th className="text-center pb-2 w-52">Rating (1-5)</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${cat.questions.map(function(q, qi) {
+                  var typeColor = q.type === 'Must Have' ? 'text-red-600 bg-red-50' : q.type === 'Up-Side' ? 'text-purple-600 bg-purple-50' : 'text-blue-600 bg-blue-50';
+                  return html`<tr key=${q.id} className="border-t border-gray-100">
+                    <td className="py-3 text-sm text-gray-400">${qi + 1}</td>
+                    <td className="py-3 pr-4">
+                      <div className="text-sm text-gray-700">${q.text}</div>
+                      <div className="text-xs text-gray-400 mt-0.5">${q.label}</div>
+                      <input type="text" placeholder="Add comment..."
+                        value=${comments[q.id] || ''}
+                        onChange=${function(e) { onComment(q.id, e.target.value); }}
+                        className="mt-1 text-xs text-gray-500 border-0 border-b border-transparent focus:border-gray-300 bg-transparent w-full outline-none px-0 py-0.5" />
+                    </td>
+                    <td className="py-3"><span className=${'text-xs px-2 py-0.5 rounded-full font-medium ' + typeColor}>${q.type}</span></td>
+                    <td className="py-3 text-sm text-gray-600 text-center">${q.weight}</td>
+                    <td className="py-3"><${RatingButtons} value=${ratings[q.id] || 0} onChange=${function(v) { onRate(q.id, v); }} /></td>
+                  </tr>`;
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>`}
+      </div>`;
+    }
+
+    // ─── Assessment Page ────────────────────────────────────────────────
+    function AssessmentPage() {
+      var ctx = useApp();
+      var state = ctx.state;
+      var dispatch = ctx.dispatch;
+      var ref = state.template;
+      var expandedCats = useState({})[0];
+      var setExpandedCats = useState({})[1];
+      // Use proper useState
+      var _exp = useState({});
+      expandedCats = _exp[0];
+      setExpandedCats = _exp[1];
+
+      var _tab = useState('org');
+      var assessTab = _tab[0];
+      var setAssessTab = _tab[1];
+
+      var activeTeam = state.teams.find(function(t) { return t.id === state.activeTeamId; });
+
+      function toggleCat(catId) {
+        var n = Object.assign({}, expandedCats);
+        n[catId] = !n[catId];
+        setExpandedCats(n);
+      }
+
+      // Organization assessment
+      var orgResult = calcOverallScore(ref.orgCategories, state.orgAssessment.ratings, ref.scaleConversion);
+
+      // Team assessment
+      var teamResult = activeTeam ? calcOverallScore(ref.teamCategories, activeTeam.ratings, ref.scaleConversion) : null;
+
+      // Team management
+      var _showAdd = useState(false);
+      var showAddTeam = _showAdd[0];
+      var setShowAddTeam = _showAdd[1];
+      var _newName = useState('');
+      var newTeamName = _newName[0];
+      var setNewTeamName = _newName[1];
+      var _newPA = useState('');
+      var newPA = _newPA[0];
+      var setNewPA = _newPA[1];
+      var _newDiv = useState('');
+      var newDiv = _newDiv[0];
+      var setNewDiv = _newDiv[1];
+
+      function addTeam() {
+        if (!newTeamName.trim()) return;
+        dispatch({ type: 'ADD_TEAM', payload: { name: newTeamName.trim(), productArea: newPA.trim(), division: newDiv.trim() } });
+        setNewTeamName('');
+        setNewPA('');
+        setNewDiv('');
+        setShowAddTeam(false);
+      }
+
+      return html`<div className="max-w-6xl mx-auto">
+        <div className="mb-6">
+          <div className="flex items-center gap-4 mb-4">
+            <input type="text" value=${state.companyName} placeholder="Company / Organization Name"
+              onChange=${function(e) { dispatch({ type: 'SET_COMPANY_NAME', payload: e.target.value }); }}
+              className="text-xl font-bold bg-transparent border-b-2 border-transparent focus:border-blue-400 outline-none py-1 px-0 min-w-[300px]" />
+          </div>
+          <div className="flex gap-2 border-b mb-4">
+            <button onClick=${function() { setAssessTab('org'); }}
+              className=${'px-4 py-2 text-sm font-medium border-b-2 transition-colors ' + (assessTab === 'org' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700')}>
+              Organization Assessment</button>
+            <button onClick=${function() { setAssessTab('team'); }}
+              className=${'px-4 py-2 text-sm font-medium border-b-2 transition-colors ' + (assessTab === 'team' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700')}>
+              Team Assessment</button>
+          </div>
+        </div>
+
+        ${assessTab === 'org' && html`<div>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-xl font-bold text-gray-800">Agile Leadership & Governance</h2>
+              <p className="text-sm text-gray-500">Rate how strongly you agree with the statements below on a scale of 1 (totally disagree) to 5 (agree completely)</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-gray-600">Overall:</span>
+              <span className="text-lg font-bold">${Math.round(orgResult.overallPct * 100)}%</span>
+              <${PctBadge} pct=${orgResult.overallPct} />
+            </div>
+          </div>
+          ${ref.orgCategories.map(function(cat) {
+            return html`<${CategoryAssessment} key=${cat.id} category=${cat}
+              ratings=${state.orgAssessment.ratings} comments=${state.orgAssessment.comments}
+              scaleConversion=${ref.scaleConversion}
+              expanded=${expandedCats[cat.id]}
+              onToggle=${function() { toggleCat(cat.id); }}
+              onRate=${function(qId, r) { dispatch({ type: 'SET_ORG_RATING', payload: { questionId: qId, rating: r } }); }}
+              onComment=${function(qId, c) { dispatch({ type: 'SET_ORG_COMMENT', payload: { questionId: qId, comment: c } }); }} />`;
+          })}
+        </div>`}
+
+        ${assessTab === 'team' && html`<div>
+          <div className="flex items-center gap-3 mb-4 flex-wrap">
+            ${state.teams.map(function(t) {
+              var isActive = t.id === state.activeTeamId;
+              return html`<button key=${t.id} onClick=${function() { dispatch({ type: 'SET_ACTIVE_TEAM', payload: t.id }); }}
+                className=${'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ' + (isActive ? 'bg-blue-500 text-white' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50')}>${t.name}</button>`;
+            })}
+            <button onClick=${function() { setShowAddTeam(true); }} className="px-3 py-1.5 rounded-lg text-sm bg-gray-100 text-gray-600 hover:bg-gray-200">+ Add Team</button>
+          </div>
+
+          ${showAddTeam && html`<div className="bg-white rounded-xl shadow-sm border p-4 mb-4 fade-in">
+            <h3 className="font-medium mb-3">Add New Team</h3>
+            <div className="grid grid-cols-3 gap-3">
+              <input type="text" placeholder="Team Name *" value=${newTeamName}
+                onChange=${function(e) { setNewTeamName(e.target.value); }}
+                className="border rounded-lg px-3 py-2 text-sm" />
+              <input type="text" placeholder="Product Area" value=${newPA}
+                onChange=${function(e) { setNewPA(e.target.value); }}
+                className="border rounded-lg px-3 py-2 text-sm" />
+              <input type="text" placeholder="Division" value=${newDiv}
+                onChange=${function(e) { setNewDiv(e.target.value); }}
+                className="border rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div className="flex gap-2 mt-3">
+              <button onClick=${addTeam} className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600">Add Team</button>
+              <button onClick=${function() { setShowAddTeam(false); }} className="px-4 py-2 text-gray-600 text-sm hover:bg-gray-100 rounded-lg">Cancel</button>
+            </div>
+          </div>`}
+
+          ${activeTeam && html`<div>
+            <div className="bg-white rounded-xl shadow-sm border p-4 mb-4">
+              <div className="grid grid-cols-4 gap-3">
+                <div>
+                  <label className="text-xs text-gray-500">Team Name</label>
+                  <input type="text" value=${activeTeam.name}
+                    onChange=${function(e) { dispatch({ type: 'UPDATE_TEAM', payload: { id: activeTeam.id, name: e.target.value } }); }}
+                    className="block w-full border rounded-lg px-3 py-1.5 text-sm mt-1" />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500">Product Area</label>
+                  <input type="text" value=${activeTeam.productArea || ''}
+                    onChange=${function(e) { dispatch({ type: 'UPDATE_TEAM', payload: { id: activeTeam.id, productArea: e.target.value } }); }}
+                    className="block w-full border rounded-lg px-3 py-1.5 text-sm mt-1" />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500">Division</label>
+                  <input type="text" value=${activeTeam.division || ''}
+                    onChange=${function(e) { dispatch({ type: 'UPDATE_TEAM', payload: { id: activeTeam.id, division: e.target.value } }); }}
+                    className="block w-full border rounded-lg px-3 py-1.5 text-sm mt-1" />
+                </div>
+                <div className="flex items-end">
+                  <button onClick=${function() {
+                    if (state.teams.length > 1 && confirm('Delete this team?')) {
+                      dispatch({ type: 'DELETE_TEAM', payload: { id: activeTeam.id } });
+                    }
+                  }} className="text-sm text-red-500 hover:text-red-700 px-3 py-1.5">Delete Team</button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-xl font-bold text-gray-800">Team Assessment: ${activeTeam.name}</h2>
+                <p className="text-sm text-gray-500">Rate 1 (totally disagree) to 5 (agree completely)</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-gray-600">Overall:</span>
+                <span className="text-lg font-bold">${teamResult ? Math.round(teamResult.overallPct * 100) : 0}%</span>
+                <${PctBadge} pct=${teamResult ? teamResult.overallPct : 0} />
+              </div>
+            </div>
+
+            ${ref.teamCategories.map(function(cat) {
+              return html`<${CategoryAssessment} key=${cat.id} category=${cat}
+                ratings=${activeTeam.ratings} comments=${activeTeam.comments}
+                scaleConversion=${ref.scaleConversion}
+                expanded=${expandedCats[cat.id]}
+                onToggle=${function() { toggleCat(cat.id); }}
+                onRate=${function(qId, r) { dispatch({ type: 'SET_TEAM_RATING', payload: { teamId: activeTeam.id, questionId: qId, rating: r } }); }}
+                onComment=${function(qId, c) { dispatch({ type: 'SET_TEAM_COMMENT', payload: { teamId: activeTeam.id, questionId: qId, comment: c } }); }} />`;
+            })}
+          </div>`}
+
+          ${!activeTeam && state.teams.length > 0 && html`<div className="text-center py-12 text-gray-400">Select a team above to begin assessment</div>`}
+        </div>`}
+      </div>`;
+    }
+
+    // ─── Template Editor ────────────────────────────────────────────────
+    function TemplateEditor() {
+      var ctx = useApp();
+      var state = ctx.state;
+      var dispatch = ctx.dispatch;
+      var tmpl = state.template;
+
+      var _editTab = useState('team');
+      var editTab = _editTab[0];
+      var setEditTab = _editTab[1];
+
+      var _expanded = useState({});
+      var expanded = _expanded[0];
+      var setExpanded = _expanded[1];
+
+      var categories = editTab === 'org' ? tmpl.orgCategories : tmpl.teamCategories;
+      var catKey = editTab === 'org' ? 'orgCategories' : 'teamCategories';
+
+      function updateCat(catId, updates) {
+        var newCats = categories.map(function(c) { return c.id === catId ? Object.assign({}, c, updates) : c; });
+        var newTmpl = Object.assign({}, tmpl);
+        newTmpl[catKey] = newCats;
+        dispatch({ type: 'UPDATE_TEMPLATE', payload: newTmpl });
+      }
+
+      function addCategory() {
+        var newCat = { id: genId(), name: 'New Category', categoryWeight: 3, questions: [] };
+        var newTmpl = Object.assign({}, tmpl);
+        newTmpl[catKey] = categories.concat([newCat]);
+        dispatch({ type: 'UPDATE_TEMPLATE', payload: newTmpl });
+      }
+
+      function deleteCat(catId) {
+        if (!confirm('Delete this category and all its questions?')) return;
+        var newTmpl = Object.assign({}, tmpl);
+        newTmpl[catKey] = categories.filter(function(c) { return c.id !== catId; });
+        dispatch({ type: 'UPDATE_TEMPLATE', payload: newTmpl });
+      }
+
+      function addQuestion(catId) {
+        var q = { id: genId(), text: 'New question', type: 'Standard', weight: 3, label: 'New label' };
+        updateCat(catId, { questions: categories.find(function(c) { return c.id === catId; }).questions.concat([q]) });
+      }
+
+      function updateQuestion(catId, qId, updates) {
+        var cat = categories.find(function(c) { return c.id === catId; });
+        var newQs = cat.questions.map(function(q) { return q.id === qId ? Object.assign({}, q, updates) : q; });
+        updateCat(catId, { questions: newQs });
+      }
+
+      function deleteQuestion(catId, qId) {
+        var cat = categories.find(function(c) { return c.id === catId; });
+        updateCat(catId, { questions: cat.questions.filter(function(q) { return q.id !== qId; }) });
+      }
+
+      function updateScaleConversion(type, rating, value) {
+        var newConv = Object.assign({}, tmpl.scaleConversion);
+        newConv[type] = Object.assign({}, newConv[type]);
+        newConv[type][rating] = parseInt(value) || 0;
+        dispatch({ type: 'UPDATE_TEMPLATE', payload: Object.assign({}, tmpl, { scaleConversion: newConv }) });
+      }
+
+      return html`<div className="max-w-6xl mx-auto">
+        <h2 className="text-xl font-bold text-gray-800 mb-4">Template Editor</h2>
+        <p className="text-sm text-gray-500 mb-4">Customize categories, questions, weights, types, and scoring benchmarks</p>
+
+        <div className="flex gap-2 border-b mb-4">
+          <button onClick=${function() { setEditTab('org'); }}
+            className=${'px-4 py-2 text-sm font-medium border-b-2 ' + (editTab === 'org' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500')}>Organization Categories</button>
+          <button onClick=${function() { setEditTab('team'); }}
+            className=${'px-4 py-2 text-sm font-medium border-b-2 ' + (editTab === 'team' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500')}>Team Categories</button>
+          <button onClick=${function() { setEditTab('scale'); }}
+            className=${'px-4 py-2 text-sm font-medium border-b-2 ' + (editTab === 'scale' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500')}>Scale Conversion</button>
+        </div>
+
+        ${editTab === 'scale' && html`<div className="bg-white rounded-xl shadow-sm border p-6">
+          <h3 className="font-semibold mb-4">Score Conversion Matrix</h3>
+          <p className="text-sm text-gray-500 mb-4">Defines how ratings (1-5) convert to weighted scores based on question type</p>
+          <table className="w-full max-w-lg">
+            <thead><tr className="text-sm text-gray-500">
+              <th className="text-left py-2">Rating</th>
+              <th className="text-center py-2">Must Have</th>
+              <th className="text-center py-2">Standard</th>
+              <th className="text-center py-2">Up-Side</th>
+            </tr></thead>
+            <tbody>
+              ${[1,2,3,4,5].map(function(r) {
+                return html`<tr key=${r} className="border-t">
+                  <td className="py-2 font-medium">${r} - ${SCORE_LABELS[r]}</td>
+                  ${['Must Have','Standard','Up-Side'].map(function(type) {
+                    return html`<td key=${type} className="py-2 text-center">
+                      <input type="number" value=${tmpl.scaleConversion[type][r]}
+                        onChange=${function(e) { updateScaleConversion(type, r, e.target.value); }}
+                        className="w-16 text-center border rounded px-2 py-1 text-sm" />
+                    </td>`;
+                  })}
+                </tr>`;
+              })}
+            </tbody>
+          </table>
+        </div>`}
+
+        ${editTab !== 'scale' && html`<div>
+          ${categories.map(function(cat) {
+            var isExp = expanded[cat.id];
+            return html`<div key=${cat.id} className="bg-white rounded-xl shadow-sm border mb-3 overflow-hidden">
+              <div className="px-4 py-3 flex items-center gap-3">
+                <button onClick=${function() { var n = Object.assign({}, expanded); n[cat.id] = !n[cat.id]; setExpanded(n); }}
+                  className="text-gray-400 hover:text-gray-600">
+                  <${Icon} className=${'w-5 h-5 transition-transform ' + (isExp ? 'rotate-180' : '')} d="M19 9l-7 7-7-7" />
+                </button>
+                <input type="text" value=${cat.name}
+                  onChange=${function(e) { updateCat(cat.id, { name: e.target.value }); }}
+                  className="text-sm font-semibold bg-transparent border-b border-transparent focus:border-blue-400 outline-none flex-1" />
+                <label className="text-xs text-gray-500">Weight:</label>
+                <input type="number" value=${cat.categoryWeight} min="1" max="10"
+                  onChange=${function(e) { updateCat(cat.id, { categoryWeight: parseInt(e.target.value) || 1 }); }}
+                  className="w-14 text-center border rounded px-2 py-1 text-sm" />
+                <span className="text-xs text-gray-400">${cat.questions.length} questions</span>
+                <button onClick=${function() { deleteCat(cat.id); }} className="text-red-400 hover:text-red-600 text-xs ml-2">Delete</button>
+              </div>
+              ${isExp && html`<div className="px-4 pb-4 fade-in">
+                <table className="w-full text-sm">
+                  <thead><tr className="text-xs text-gray-400 uppercase">
+                    <th className="text-left pb-2 w-8">#</th>
+                    <th className="text-left pb-2">Question Text</th>
+                    <th className="text-left pb-2 w-32">Label</th>
+                    <th className="text-left pb-2 w-28">Type</th>
+                    <th className="text-left pb-2 w-16">Weight</th>
+                    <th className="w-8"></th>
+                  </tr></thead>
+                  <tbody>
+                    ${cat.questions.map(function(q, qi) {
+                      return html`<tr key=${q.id} className="border-t border-gray-100">
+                        <td className="py-2 text-gray-400">${qi+1}</td>
+                        <td className="py-2 pr-2"><input type="text" value=${q.text}
+                          onChange=${function(e) { updateQuestion(cat.id, q.id, { text: e.target.value }); }}
+                          className="w-full bg-transparent border-b border-transparent focus:border-blue-300 outline-none text-sm" /></td>
+                        <td className="py-2 pr-2"><input type="text" value=${q.label}
+                          onChange=${function(e) { updateQuestion(cat.id, q.id, { label: e.target.value }); }}
+                          className="w-full bg-transparent border-b border-transparent focus:border-blue-300 outline-none text-sm" /></td>
+                        <td className="py-2"><select value=${q.type}
+                          onChange=${function(e) { updateQuestion(cat.id, q.id, { type: e.target.value }); }}
+                          className="border rounded px-2 py-1 text-xs">
+                          <option>Must Have</option><option>Standard</option><option>Up-Side</option>
+                        </select></td>
+                        <td className="py-2"><input type="number" value=${q.weight} min="1" max="5"
+                          onChange=${function(e) { updateQuestion(cat.id, q.id, { weight: parseInt(e.target.value) || 1 }); }}
+                          className="w-12 text-center border rounded px-1 py-1 text-sm" /></td>
+                        <td className="py-2"><button onClick=${function() { deleteQuestion(cat.id, q.id); }}
+                          className="text-red-400 hover:text-red-600 text-xs">x</button></td>
+                      </tr>`;
+                    })}
+                  </tbody>
+                </table>
+                <button onClick=${function() { addQuestion(cat.id); }}
+                  className="mt-2 text-sm text-blue-500 hover:text-blue-700">+ Add Question</button>
+              </div>`}
+            </div>`;
+          })}
+          <button onClick=${addCategory}
+            className="mt-2 px-4 py-2 bg-gray-100 text-gray-600 rounded-lg text-sm hover:bg-gray-200">+ Add Category</button>
+        </div>`}
+      </div>`;
+    }
+
+    // ─── Team Report Dashboard ──────────────────────────────────────────
+    function TeamReport() {
+      var ctx = useApp();
+      var state = ctx.state;
+      var ref = state.template;
+
+      var _selTeam = useState(state.activeTeamId || (state.teams[0] && state.teams[0].id));
+      var selTeamId = _selTeam[0];
+      var setSelTeamId = _selTeam[1];
+
+      var team = state.teams.find(function(t) { return t.id === selTeamId; });
+
+      var orgResult = calcOverallScore(ref.orgCategories, state.orgAssessment.ratings, ref.scaleConversion);
+      var teamResult = team ? calcOverallScore(ref.teamCategories, team.ratings, ref.scaleConversion) : null;
+
+      // Combine org + team results for overall
+      var allCatResults = orgResult.categoryResults.concat(teamResult ? teamResult.categoryResults : []);
+      var totalWeight = 0;
+      var totalWeightedPct = 0;
+      allCatResults.forEach(function(cr) {
+        if (cr.answered > 0) {
+          totalWeightedPct += cr.pct * cr.categoryWeight;
+          totalWeight += cr.categoryWeight;
+        }
+      });
+      var combinedOverall = totalWeight > 0 ? totalWeightedPct / totalWeight : 0;
+      var combinedGrade = letterGrade(combinedOverall);
+
+      // Completion stats
+      var totalQ = allCatResults.reduce(function(s, c) { return s + c.total; }, 0);
+      var totalA = allCatResults.reduce(function(s, c) { return s + c.answered; }, 0);
+
+      // Radar data
+      var radarData = allCatResults.map(function(cr) {
+        return { label: cr.categoryName.replace(/^[IVXLCDM]+\.\s*/, ''), value: cr.pct };
+      });
+
+      // Top improvements (lowest scoring categories)
+      var sorted = allCatResults.slice().filter(function(c) { return c.answered > 0; }).sort(function(a, b) { return a.pct - b.pct; });
+      var topImprovements = sorted.slice(0, 5);
+      var topStrengths = sorted.slice().reverse().slice(0, 5);
+
+      // Bar chart data
+      var barData = allCatResults.map(function(cr) {
+        return { label: cr.categoryName.replace(/^[IVXLCDM]+\.\s*/, ''), value: cr.pct };
+      });
+
+      return html`<div className="max-w-6xl mx-auto">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-800">Assessment Report</h2>
+            <p className="text-sm text-gray-500">${state.companyName || 'Company'}</p>
+          </div>
+          <select value=${selTeamId || ''} onChange=${function(e) { setSelTeamId(e.target.value); }}
+            className="border rounded-lg px-3 py-2 text-sm">
+            ${state.teams.map(function(t) {
+              return html`<option key=${t.id} value=${t.id}>${t.name}</option>`;
+            })}
+          </select>
+        </div>
+
+        <div className="grid grid-cols-4 gap-4 mb-6">
+          <div className="bg-white rounded-xl shadow-sm border p-5 text-center">
+            <div className="text-sm text-gray-500 mb-2">Overall Score</div>
+            <div className="text-3xl font-bold mb-2">${Math.round(combinedOverall * 100)}%</div>
+            <${PctBadge} pct=${combinedOverall} size="lg" />
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border p-5 text-center">
+            <div className="text-sm text-gray-500 mb-2">Organization Score</div>
+            <div className="text-3xl font-bold mb-2">${Math.round(orgResult.overallPct * 100)}%</div>
+            <${PctBadge} pct=${orgResult.overallPct} />
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border p-5 text-center">
+            <div className="text-sm text-gray-500 mb-2">Team Score</div>
+            <div className="text-3xl font-bold mb-2">${teamResult ? Math.round(teamResult.overallPct * 100) : 0}%</div>
+            <${PctBadge} pct=${teamResult ? teamResult.overallPct : 0} />
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border p-5 text-center">
+            <div className="text-sm text-gray-500 mb-2">Completion</div>
+            <div className="text-3xl font-bold mb-2">${totalQ > 0 ? Math.round(totalA/totalQ*100) : 0}%</div>
+            <div className="text-xs text-gray-400">${totalA}/${totalQ} questions</div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-6 mb-6">
+          <div className="bg-white rounded-xl shadow-sm border p-5">
+            <h3 className="font-semibold text-gray-700 mb-3">Results by Category</h3>
+            <${HBarChart} data=${barData} width=${500} labelWidth=${180} />
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border p-5 flex items-center justify-center">
+            <${RadarChart} data=${radarData} size=${380} series=${[{ data: radarData, color: '#3b82f6', fillColor: 'rgba(59,130,246,0.15)' }]} />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-6 mb-6">
+          <div className="bg-white rounded-xl shadow-sm border p-5">
+            <h3 className="font-semibold text-gray-700 mb-3">Top Areas for Improvement</h3>
+            <table className="w-full text-sm">
+              <thead><tr className="text-xs text-gray-400 uppercase"><th className="text-left pb-2">#</th><th className="text-left pb-2">Category</th><th className="text-right pb-2">Score</th></tr></thead>
+              <tbody>
+                ${topImprovements.map(function(c, i) {
+                  return html`<tr key=${i} className="border-t border-gray-100">
+                    <td className="py-2 text-gray-400">${i+1}</td>
+                    <td className="py-2">${c.categoryName}</td>
+                    <td className="py-2 text-right">${Math.round(c.pct * 100)}%</td>
+                    <td className="py-2 text-right"><${PctBadge} pct=${c.pct} size="sm" /></td>
+                  </tr>`;
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border p-5">
+            <h3 className="font-semibold text-gray-700 mb-3">Key Strengths</h3>
+            <table className="w-full text-sm">
+              <thead><tr className="text-xs text-gray-400 uppercase"><th className="text-left pb-2">#</th><th className="text-left pb-2">Category</th><th className="text-right pb-2">Score</th></tr></thead>
+              <tbody>
+                ${topStrengths.map(function(c, i) {
+                  return html`<tr key=${i} className="border-t border-gray-100">
+                    <td className="py-2 text-gray-400">${i+1}</td>
+                    <td className="py-2">${c.categoryName}</td>
+                    <td className="py-2 text-right">${Math.round(c.pct * 100)}%</td>
+                    <td className="py-2 text-right"><${PctBadge} pct=${c.pct} size="sm" /></td>
+                  </tr>`;
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    // ─── Enterprise Dashboard ───────────────────────────────────────────
+    function EnterpriseDashboard() {
+      var ctx = useApp();
+      var state = ctx.state;
+      var ref = state.template;
+
+      var _dim = useState('all');
+      var dimension = _dim[0];
+      var setDimension = _dim[1];
+
+      // Calculate results for all teams
+      var teamResults = state.teams.map(function(team) {
+        var orgRes = calcOverallScore(ref.orgCategories, state.orgAssessment.ratings, ref.scaleConversion);
+        var teamRes = calcOverallScore(ref.teamCategories, team.ratings, ref.scaleConversion);
+        var allCats = orgRes.categoryResults.concat(teamRes.categoryResults);
+        var tw = 0, tp = 0;
+        allCats.forEach(function(c) { if (c.answered > 0) { tp += c.pct * c.categoryWeight; tw += c.categoryWeight; } });
+        var overall = tw > 0 ? tp / tw : 0;
+        return {
+          teamId: team.id, teamName: team.name,
+          productArea: team.productArea || 'Unassigned',
+          division: team.division || 'Unassigned',
+          overallPct: overall, grade: letterGrade(overall),
+          orgResult: orgRes, teamResult: teamRes,
+          allCatResults: allCats
+        };
+      });
+
+      // Get unique dimensions
+      var productAreas = [];
+      var divisions = [];
+      var paSet = {};
+      var divSet = {};
+      state.teams.forEach(function(t) {
+        var pa = t.productArea || 'Unassigned';
+        var div = t.division || 'Unassigned';
+        if (!paSet[pa]) { paSet[pa] = true; productAreas.push(pa); }
+        if (!divSet[div]) { divSet[div] = true; divisions.push(div); }
+      });
+
+      // Filter teams by dimension
+      var filteredResults = teamResults;
+      if (dimension !== 'all' && dimension.indexOf('pa:') === 0) {
+        var paFilter = dimension.slice(3);
+        filteredResults = teamResults.filter(function(r) { return r.productArea === paFilter; });
+      } else if (dimension !== 'all' && dimension.indexOf('div:') === 0) {
+        var divFilter = dimension.slice(4);
+        filteredResults = teamResults.filter(function(r) { return r.division === divFilter; });
+      }
+
+      // Aggregate scores across filtered teams
+      var aggCatScores = {};
+      var allCatNames = ref.orgCategories.concat(ref.teamCategories);
+      allCatNames.forEach(function(cat) {
+        aggCatScores[cat.id] = { name: cat.name, total: 0, count: 0 };
+      });
+      filteredResults.forEach(function(tr) {
+        tr.allCatResults.forEach(function(cr) {
+          if (cr.answered > 0 && aggCatScores[cr.categoryId]) {
+            aggCatScores[cr.categoryId].total += cr.pct;
+            aggCatScores[cr.categoryId].count += 1;
+          }
+        });
+      });
+
+      var aggBarData = allCatNames.map(function(cat) {
+        var agg = aggCatScores[cat.id];
+        var avg = agg && agg.count > 0 ? agg.total / agg.count : 0;
+        return { label: cat.name.replace(/^[IVXLCDM]+\.\s*/, ''), value: avg };
+      });
+
+      var aggRadarData = aggBarData.slice();
+
+      // Enterprise overall
+      var entOverall = filteredResults.length > 0 ? filteredResults.reduce(function(s, r) { return s + r.overallPct; }, 0) / filteredResults.length : 0;
+
+      // Teams comparison table
+      filteredResults.sort(function(a, b) { return b.overallPct - a.overallPct; });
+
+      return html`<div className="max-w-6xl mx-auto">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-800">Enterprise Dashboard</h2>
+            <p className="text-sm text-gray-500">${state.companyName || 'Enterprise'} - ${filteredResults.length} team${filteredResults.length !== 1 ? 's' : ''}</p>
+          </div>
+          <select value=${dimension} onChange=${function(e) { setDimension(e.target.value); }}
+            className="border rounded-lg px-3 py-2 text-sm">
+            <option value="all">All Teams (Enterprise)</option>
+            <optgroup label="By Product Area">
+              ${productAreas.map(function(pa) { return html`<option key=${'pa:'+pa} value=${'pa:'+pa}>${pa}</option>`; })}
+            </optgroup>
+            <optgroup label="By Division">
+              ${divisions.map(function(d) { return html`<option key=${'div:'+d} value=${'div:'+d}>${d}</option>`; })}
+            </optgroup>
+          </select>
+        </div>
+
+        <div className="grid grid-cols-3 gap-4 mb-6">
+          <div className="bg-white rounded-xl shadow-sm border p-5 text-center">
+            <div className="text-sm text-gray-500 mb-2">Enterprise Score</div>
+            <div className="text-3xl font-bold mb-2">${Math.round(entOverall * 100)}%</div>
+            <${PctBadge} pct=${entOverall} size="lg" />
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border p-5 text-center">
+            <div className="text-sm text-gray-500 mb-2">Teams Assessed</div>
+            <div className="text-3xl font-bold">${filteredResults.length}</div>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border p-5 text-center">
+            <div className="text-sm text-gray-500 mb-2">Score Range</div>
+            <div className="text-xl font-bold">
+              ${filteredResults.length > 0 ? Math.round(filteredResults[filteredResults.length-1].overallPct * 100) + '% - ' + Math.round(filteredResults[0].overallPct * 100) + '%' : 'N/A'}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-6 mb-6">
+          <div className="bg-white rounded-xl shadow-sm border p-5">
+            <h3 className="font-semibold text-gray-700 mb-3">Aggregate Scores by Category</h3>
+            <${HBarChart} data=${aggBarData} width=${500} labelWidth=${180} />
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border p-5 flex items-center justify-center">
+            ${aggRadarData.length >= 3 && html`<${RadarChart} data=${aggRadarData} size=${380}
+              series=${[{ data: aggRadarData, color: '#8b5cf6', fillColor: 'rgba(139,92,246,0.15)' }]} />`}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-sm border p-5 mb-6">
+          <h3 className="font-semibold text-gray-700 mb-3">Team Comparison</h3>
+          <table className="w-full text-sm">
+            <thead><tr className="text-xs text-gray-400 uppercase border-b">
+              <th className="text-left pb-2">Rank</th>
+              <th className="text-left pb-2">Team</th>
+              <th className="text-left pb-2">Product Area</th>
+              <th className="text-left pb-2">Division</th>
+              <th className="text-right pb-2">Score</th>
+              
+              <th className="pb-2 w-48"></th>
+            </tr></thead>
+            <tbody>
+              ${filteredResults.map(function(tr, i) {
+                return html`<tr key=${tr.teamId} className="border-t border-gray-100 hover:bg-gray-50">
+                  <td className="py-3 text-gray-400">${i+1}</td>
+                  <td className="py-3 font-medium">${tr.teamName}</td>
+                  <td className="py-3 text-gray-500">${tr.productArea}</td>
+                  <td className="py-3 text-gray-500">${tr.division}</td>
+                  <td className="py-3 text-right font-medium">${Math.round(tr.overallPct * 100)}%</td>
+                  <td className="py-3 text-right"><${PctBadge} pct=${tr.overallPct} size="sm" /></td>
+                  <td className="py-3"><${ProgressBar} value=${tr.overallPct * 100} color=${'bg-[' + pctColor(tr.overallPct).hex + ']'} /></td>
+                </tr>`;
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        ${filteredResults.length > 1 && html`<div className="bg-white rounded-xl shadow-sm border p-5 mb-6">
+          <h3 className="font-semibold text-gray-700 mb-3">Category Comparison Across Teams</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-xs text-gray-400 uppercase border-b">
+                <th className="text-left pb-2">Category</th>
+                ${filteredResults.map(function(tr) {
+                  return html`<th key=${tr.teamId} className="text-center pb-2 px-2">${tr.teamName}</th>`;
+                })}
+                <th className="text-center pb-2">Average</th>
+              </tr></thead>
+              <tbody>
+                ${allCatNames.map(function(cat) {
+                  var vals = filteredResults.map(function(tr) {
+                    var cr = tr.allCatResults.find(function(c) { return c.categoryId === cat.id; });
+                    return cr && cr.answered > 0 ? cr.pct : null;
+                  });
+                  var validVals = vals.filter(function(v) { return v !== null; });
+                  var avg = validVals.length > 0 ? validVals.reduce(function(s,v) { return s+v; }, 0) / validVals.length : 0;
+                  return html`<tr key=${cat.id} className="border-t border-gray-100">
+                    <td className="py-2 text-gray-700">${cat.name.replace(/^[IVXLCDM]+\.\s*/, '')}</td>
+                    ${vals.map(function(v, vi) {
+                      return html`<td key=${vi} className="py-2 text-center">
+                        ${v !== null ? html`<${PctBadge} pct=${v} size="sm" />` : html`<span className="text-gray-300">-</span>`}
+                      </td>`;
+                    })}
+                    <td className="py-2 text-center font-medium">${Math.round(avg * 100)}%</td>
+                  </tr>`;
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>`}
+      </div>`;
+    }
+
+    // ─── Data Management ────────────────────────────────────────────────
+    function DataManagement() {
+      var ctx = useApp();
+      var state = ctx.state;
+      var dispatch = ctx.dispatch;
+
+      function exportJSON() {
+        var blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = 'agile-assessment-' + new Date().toISOString().slice(0,10) + '.json';
+        a.click(); URL.revokeObjectURL(url);
+      }
+
+      function importJSON() {
+        var input = document.createElement('input');
+        input.type = 'file'; input.accept = '.json';
+        input.onchange = function(e) {
+          var file = e.target.files[0];
+          if (!file) return;
+          var reader = new FileReader();
+          reader.onload = function(ev) {
+            try {
+              var data = JSON.parse(ev.target.result);
+              if (data.template && data.teams) {
+                dispatch({ type: 'IMPORT_STATE', payload: data });
+              } else { alert('Invalid file format'); }
+            } catch(err) { alert('Error reading file: ' + err.message); }
+          };
+          reader.readAsText(file);
+        };
+        input.click();
+      }
+
+      function exportCSV() {
+        var ref = state.template;
+        var rows = [['Team', 'Product Area', 'Division', 'Overall Score', 'Overall Pct']];
+        var allCats = ref.orgCategories.concat(ref.teamCategories);
+        allCats.forEach(function(cat) { rows[0].push(cat.name + ' (%)');  });
+
+        state.teams.forEach(function(team) {
+          var orgRes = calcOverallScore(ref.orgCategories, state.orgAssessment.ratings, ref.scaleConversion);
+          var teamRes = calcOverallScore(ref.teamCategories, team.ratings, ref.scaleConversion);
+          var allR = orgRes.categoryResults.concat(teamRes.categoryResults);
+          var tw = 0, tp = 0;
+          allR.forEach(function(c) { if (c.answered > 0) { tp += c.pct * c.categoryWeight; tw += c.categoryWeight; } });
+          var ov = tw > 0 ? tp / tw : 0;
+          var row = [team.name, team.productArea || '', team.division || '', Math.round(ov * 100) + '%'];
+          allCats.forEach(function(cat) {
+            var cr = allR.find(function(c) { return c.categoryId === cat.id; });
+            row.push(cr ? Math.round(cr.pct * 100) + '%' : '');
+            
+          });
+          rows.push(row);
+        });
+
+        var csv = rows.map(function(r) {
+          return r.map(function(c) {
+            var s = String(c == null ? '' : c);
+            return s.indexOf(',') >= 0 || s.indexOf('"') >= 0 ? '"' + s.replace(/"/g, '""') + '"' : s;
+          }).join(',');
+        }).join('\n');
+
+        var blob = new Blob([csv], { type: 'text/csv' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = 'agile-assessment-' + new Date().toISOString().slice(0,10) + '.csv';
+        a.click(); URL.revokeObjectURL(url);
+      }
+
+      return html`<div className="max-w-4xl mx-auto">
+        <h2 className="text-xl font-bold text-gray-800 mb-4">Data Management</h2>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="bg-white rounded-xl shadow-sm border p-5">
+            <h3 className="font-semibold mb-2">Export</h3>
+            <p className="text-sm text-gray-500 mb-4">Download assessment data for backup or sharing</p>
+            <div className="flex gap-2">
+              <button onClick=${exportJSON} className="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600">Export JSON</button>
+              <button onClick=${exportCSV} className="px-4 py-2 bg-green-500 text-white rounded-lg text-sm hover:bg-green-600">Export CSV</button>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border p-5">
+            <h3 className="font-semibold mb-2">Import</h3>
+            <p className="text-sm text-gray-500 mb-4">Load previously exported assessment data</p>
+            <button onClick=${importJSON} className="px-4 py-2 bg-indigo-500 text-white rounded-lg text-sm hover:bg-indigo-600">Import JSON</button>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border p-5 col-span-2">
+            <h3 className="font-semibold mb-2">Reset</h3>
+            <p className="text-sm text-gray-500 mb-4">Reset all data to default template. This cannot be undone.</p>
+            <button onClick=${function() {
+              if (confirm('Are you sure you want to reset ALL data? This cannot be undone.')) {
+                dispatch({ type: 'RESET_STATE' });
+              }
+            }} className="px-4 py-2 bg-red-500 text-white rounded-lg text-sm hover:bg-red-600">Reset All Data</button>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    // ─── App Shell ──────────────────────────────────────────────────────
+    function App() {
+      var init = loadState();
+      var _state = useReducer(reducer, init);
+      var state = _state[0];
+      var dispatch = _state[1];
+
+      useEffect(function() { saveState(state); }, [state]);
+
+      var _view = useState(init.activeView || 'assess');
+      var view = _view[0];
+      var setView = _view[1];
+
+      var ctx = { state: state, dispatch: dispatch };
+
+      var navItems = [
+        { id: 'assess', label: 'Assessment', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2' },
+        { id: 'report', label: 'Team Report', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
+        { id: 'enterprise', label: 'Enterprise', icon: 'M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4' },
+        { id: 'template', label: 'Template', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z' },
+        { id: 'data', label: 'Data', icon: 'M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4' },
+      ];
+
+      return html`<${AppCtx.Provider} value=${ctx}>
+        <div className="flex min-h-screen">
+          <nav className="w-56 bg-white border-r border-gray-200 flex-shrink-0 no-print">
+            <div className="p-4 border-b">
+              <h1 className="text-lg font-bold text-gray-800">Agile Assessment</h1>
+              <p className="text-xs text-gray-400">Capability Assessment Tool</p>
+            </div>
+            <div className="p-2">
+              ${navItems.map(function(item) {
+                var active = view === item.id;
+                return html`<button key=${item.id} onClick=${function() { setView(item.id); }}
+                  className=${'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors mb-0.5 ' + (active ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50')}>
+                  <${Icon} className="w-5 h-5" d=${item.icon} />
+                  ${item.label}
+                </button>`;
+              })}
+            </div>
+          </nav>
+          <main className="flex-1 p-6 overflow-y-auto">
+            ${view === 'assess' && html`<${AssessmentPage} />`}
+            ${view === 'report' && html`<${TeamReport} />`}
+            ${view === 'enterprise' && html`<${EnterpriseDashboard} />`}
+            ${view === 'template' && html`<${TemplateEditor} />`}
+            ${view === 'data' && html`<${DataManagement} />`}
+          </main>
+        </div>
+      </${AppCtx.Provider}>`;
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(html`<${App} />`);
+  </script>
+</body>
+</html>
